@@ -132,7 +132,7 @@ class InverseScattering(nn.Module):
             numerator_gama = torch.bmm(Es_meas_p.unsqueeze(1).conj(), term_v).squeeze(-1) # [B, 1]
             denominator_gama = torch.norm(term_v, dim=1, keepdim=True).pow(2).squeeze(-1) # [B, 1]
 
-            gama_p_batch = numerator_gama / (denominator_gama + 1e-12) # [B, 1]
+            gama_p_batch = numerator_gama / (denominator_gama) # [B, 1]
 
             # Calculate J(:,p) - Induced Current Density
             J_p_batch = gama_p_batch[:, None, :] * torch.bmm(Gs_t.conj().T.expand(B, -1, -1), Es_meas_p.unsqueeze(-1)) # [B, M, 1]
@@ -146,70 +146,14 @@ class InverseScattering(nn.Module):
             accumulator_a += J_p_batch * Et_p_batch.conj()
             accumulator_b += Et_p_batch.abs().pow(2)
 
-        Khai_BP_vec = accumulator_a / (accumulator_b + 1e-12) # [B, M, 1]
+        Khai_BP_vec = accumulator_a / (accumulator_b) # [B, M, 1]
 
         # The BP method in MATLAB typically reconstructs (epsilon_r - 1).
         # To get a permittivity image in [0,1] range compatible with GT perm:
         # Reconstructed permittivity = real(Khai_BP_vec) / self.chai
-        reconstructed_permittivity = Khai_BP_vec.real.view(B, N, N) / self.chai
+        reconstructed_permittivity = Khai_BP_vec.real.view(B, N, N)
 
         # Clamp to ensure output is within [0,1] range for image display/metrics
         reconstructed_permittivity = torch.clamp(reconstructed_permittivity, 0, 1)
 
         return reconstructed_permittivity.unsqueeze(1) # [B, 1, N, N] for image format
-
-
-if __name__ == "__main__":
-    # --- Configuration ---
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    image_size = 32          # Spatial dimension N (e.g., 32x32 image)
-    n_incident_waves = 32    # Number of incident waves
-    er_object = 1.1          # Relative permittivity of the object
-    frequency = 4e8          # Operating frequency
-
-    # --- Instantiate the InverseScattering model (internally generates Gs, Gd, Ei) ---
-    scattering_model = InverseScattering(
-        image_size=image_size,
-        n_inc_wave=n_incident_waves,
-        er=er_object
-    ).to(device)
-    scattering_model.eval()
-
-    # --- Create a Synthetic Object (10x10 square) ---
-    synthetic_permittivity = torch.zeros(
-        (1, 1, image_size, image_size), dtype=torch.float32, device=device
-    )
-    # Define square from index 11 to 20 (inclusive), making it 10x10 pixels
-    synthetic_permittivity[:, :, 3, 16] = 1.0
-
-    # --- Simulate Scattered Fields (Forward Model) ---
-    with torch.no_grad():
-        es_simulated_measurements = scattering_model(synthetic_permittivity)
-
-    # --- Compute Reconstruction using Backpropagation (BP) Method ---
-    with torch.no_grad():
-        reconstructed_permittivity_bp = scattering_model.BP(es_simulated_measurements)
-    
-    # --- Prepare for Plotting ---
-    synthetic_img_np = synthetic_permittivity.squeeze().cpu().numpy()
-    reconstructed_img_np = reconstructed_permittivity_bp.squeeze().cpu().numpy()
-
-    # --- Display Result ---
-    fig, axes = plt.subplots(1, 2, figsize=(8, 4)) # Adjusted figsize for conciseness
-
-    im1 = axes[0].imshow(synthetic_img_np, cmap='viridis', vmin=0, vmax=1)
-    axes[0].set_title('Ground Truth')
-    axes[0].axis('off') # Turn off axis labels and ticks
-    fig.colorbar(im1, ax=axes[0])
-
-    im2 = axes[1].imshow(reconstructed_img_np*10, cmap='viridis', vmin=0, vmax=1)
-    axes[1].set_title('BP Reconstruction')
-    axes[1].axis('off') # Turn off axis labels and ticks
-    fig.colorbar(im2, ax=axes[1])
-
-    plt.suptitle(f"BP Reconstruction for {image_size}x{image_size} object with er={er_object}")
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to prevent suptitle overlap
-    plt.show()
-    print(f"reconstructed_img_np[0, 0] is: {reconstructed_img_np[0, 0]}")
-
