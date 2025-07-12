@@ -3,7 +3,7 @@
 import numpy as np
 from scipy.special import hankel2, jv
 
-def generate_green_matrices(D=2, R=3, epsilon_b=1.0, N=40, Nr=36, f=4e8):
+def generate_green_matrices(D=2, R=3, epsilon_b=1.0, N=32, Nr=32, f=4e8):
     """
     Generate Gs, Gd, and Ei for 2D inverse scattering.
     Returns: Gs [Nr, M], Gd [M, M], Ei [M, Nr]
@@ -79,5 +79,3 @@ def generate_green_matrices(D=2, R=3, epsilon_b=1.0, N=40, Nr=36, f=4e8):
         Ei[:, i] = np.exp(1j * k0 * (Xi0 * np.cos(angle_rad) + Yi0 * np.sin(angle_rad)))
 
     return Gs.astype(np.complex64), Gd.astype(np.complex64), Ei.astype(np.complex64)
-
-

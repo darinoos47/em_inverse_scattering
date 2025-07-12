@@ -24,3 +24,16 @@ def load_mnist_dataset(image_size=32, batch_size=64):
     ## images: tensor of shape [B, 1, image_size, image_size], values in [0, 1]
     ## labels: tensor of digit labels [B] — not used in your physics application but available
     return dataloader
+    
+def load_fashion_mnist_dataset(image_size=32, batch_size=64):
+    """
+    Loads the Fashion-MNIST dataset and returns a PyTorch DataLoader.
+    """
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Resize((image_size, image_size))
+    ])
+    # Load the Fashion-MNIST dataset
+    dataset = datasets.FashionMNIST(root='./fashion_mnist_data', train=True, download=True, transform=transform)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    return dataloader    

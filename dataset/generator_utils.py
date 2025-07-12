@@ -1,8 +1,8 @@
 import torch
 import os
 
-def generate_and_save_dataset(scatter_model, dataloader, save_dir="./generated_dataset", max_batches=200):
-#def generate_and_save_dataset(scatter_model, dataloader, save_dir="/content/generated_dataset", max_batches=200):
+#def generate_and_save_dataset(scatter_model, dataloader, save_dir="./generated_dataset", max_batches=200):
+def generate_and_save_dataset(scatter_model, dataloader, save_dir="/content/generated_dataset", max_batches=200):
 
     os.makedirs(save_dir, exist_ok=True)
 

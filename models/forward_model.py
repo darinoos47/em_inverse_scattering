@@ -56,6 +56,7 @@ class InverseScattering(nn.Module):
         Es = torch.bmm(Gsgt, Et)  # [B, n_meas, n_inc]
 
         return Es
+
     
     def BA(self, Es, gamma, image_size=40):
         B = Es.shape[0]
@@ -93,7 +94,7 @@ class InverseScattering(nn.Module):
         J = torch.zeros(B, M, n_inc, dtype=dtype, device=device)
         Et = torch.zeros(B, n_meas, n_inc, dtype=dtype, device=device)
 
-    def BP(self, Es_meas, image_size=None):
+    def BP(self, Es_meas_stacked, image_size=None):
         """
         Backpropagation (BP) reconstruction method based on the provided MATLAB code.
         This method is a direct (non-iterative over outer loop) inverse solver.
@@ -107,17 +108,22 @@ class InverseScattering(nn.Module):
         if image_size is None:
             image_size = self.image_size
 
-        B = Es_meas.shape[0] # Batch size
+        B = Es_meas_stacked.shape[0] # Batch size
         N = image_size
         M = N * N # Total number of internal cells
         n_inc = self.Ei.shape[1] # Number of incident waves (Nr in MATLAB)
         n_meas = self.Gs.shape[0] # Number of measurement points (Nr in MATLAB for Rx)
 
-        device = Es_meas.device
+        device = Es_meas_stacked.device
 
         Gs_t = self.Gs.to(device=device) # [n_meas, M]
         Gd_t = self.Gd.to(device=device) # [M, M]
         Ei_t = self.Ei.to(device=device) # [M, n_inc]
+
+        # NEW: Convert Es_meas_stacked [B, 2, n_meas, n_inc] to complex Es_meas [B, n_meas, n_inc]
+        Es_meas_real = Es_meas_stacked[:, 0, :, :] # [B, n_meas, n_inc]
+        Es_meas_imag = Es_meas_stacked[:, 1, :, :] # [B, n_meas, n_inc]
+        Es_meas = Es_meas_real + 1j * Es_meas_imag # [B, n_meas, n_inc] (complex)
 
         accumulator_a = torch.zeros(B, M, 1, dtype=Es_meas.dtype, device=device)
         accumulator_b = torch.zeros(B, M, 1, dtype=Es_meas.dtype, device=device)

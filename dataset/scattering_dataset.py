@@ -9,10 +9,11 @@ class ScatteringDataset(Dataset):
     def __init__(self, data_dir="./generated_dataset"):
         self.data_dir = data_dir
         self.files = sorted([f for f in os.listdir(data_dir) if f.endswith(".pt")])
-
+# __len__ is a special method. It returns length, so we can use len on this object: len(my_obj)
     def __len__(self):
         return len(self.files)
-
+# __getitem__ is a special method (also called a “magic method” or “dunder method” — short for “double underscore”).
+# Whenever we write my_dataset[i], Python automatically calls my_dataset.__getitem__(i)
     def __getitem__(self, idx):
         file_path = os.path.join(self.data_dir, self.files[idx])
         data = torch.load(file_path)
