@@ -1,4 +1,4 @@
-# test/test_model.py (Updated)
+# test/test_model.py (Fixed)
 
 import torch
 from torch.utils.data import DataLoader
@@ -139,7 +139,6 @@ def evaluate_model(model, data_loader, device, output_dir, dataset_name, input_t
 
 def main():
     parser = argparse.ArgumentParser(description="Test a trained model.")
-    # --- Add model_name argument ---
     parser.add_argument('--model_name', type=str, required=True, choices=['unet', 'dncnn', 'swinir'], help='Name of the model architecture to test.')
     parser.add_argument('--checkpoint_path', type=str, required=True, help='Path to the model checkpoint.')
     parser.add_argument('--mnist_data_dir', type=str, required=True)
@@ -157,7 +156,6 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     print(f"Testing {args.model_name} from checkpoint: {args.checkpoint_path}")
 
-    # --- Load Correct Model Architecture ---
     in_channels = 1 if args.input_type == "BP" else 2
     model = get_model(
         args.model_name,
@@ -166,7 +164,11 @@ def main():
         image_size=args.forward_model_image_size
     ).to(device)
 
-    checkpoint = torch.load(args.checkpoint_path, map_location=device)
+    # --- FIX: Load checkpoint with weights_only=False ---
+    # This is safe because we are loading our own trusted checkpoints.
+    # It allows torch.load to unpickle the argparse.Namespace object saved during training.
+    checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=False)
+    
     model.load_state_dict(checkpoint['model_state_dict'])
     print("✅ Model weights loaded successfully.")
 
@@ -178,12 +180,10 @@ def main():
             er=args.relative_permittivity_er
         ).to(device)
 
-    # --- Test on MNIST ---
     mnist_dataset = ScatteringDataset(data_dir=args.mnist_data_dir)
     mnist_loader = DataLoader(mnist_dataset, batch_size=1, shuffle=False)
     evaluate_model(model, mnist_loader, device, args.output_dir, "MNIST", args.input_type, forward_model, seed=args.seed)
 
-    # --- Test on Fashion-MNIST ---
     fashion_dataset = ScatteringDataset(data_dir=args.fashion_mnist_data_dir)
     fashion_loader = DataLoader(fashion_dataset, batch_size=1, shuffle=False)
     evaluate_model(model, fashion_loader, device, args.output_dir, "Fashion-MNIST", args.input_type, forward_model, seed=args.seed)

@@ -13,7 +13,8 @@ def main():
     parser.add_argument('--image_size', type=int, default=32, help='Size of the image.')
     parser.add_argument('--n_inc', type=int, default=32, help='Number of incident waves.')
     parser.add_argument('--er', type=float, default=2.5, help='Relative permittivity.')
-    
+    parser.add_argument('--seed', type=int, default=0, help='Random seed for dataset shuffling')
+
     # Add an argument to choose the dataset
     parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist', 'fashion_mnist'], help='Choose between "mnist" and "fashion_mnist".')
     
@@ -36,9 +37,9 @@ def main():
 
     # Load the selected dataset
     if args.dataset == 'mnist':
-        dataloader = load_mnist_dataset(image_size=args.image_size, batch_size=64)
+        dataloader = load_mnist_dataset(image_size=args.image_size, batch_size=64, seed=args.seed)
     else: # fashion_mnist
-        dataloader = load_fashion_mnist_dataset(image_size=args.image_size, batch_size=64)
+        dataloader = load_fashion_mnist_dataset(image_size=args.image_size, batch_size=64, seed=args.seed)
 
 
     # Generate and save the dataset

@@ -10,7 +10,7 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
-def load_mnist_dataset(image_size=32, batch_size=64):
+def load_mnist_dataset(image_size=32, batch_size=64, seed=0):
     ## transforms.Compose([...]): chains together preprocessing steps
     ## transforms.ToTensor(): converts a PIL image to a PyTorch tensor with shape [1, H, W], normalized to [0, 1]
     transform = transforms.Compose([
@@ -18,14 +18,19 @@ def load_mnist_dataset(image_size=32, batch_size=64):
         transforms.Resize((image_size, image_size))  # upscale to match Gd size
     ])
     dataset = datasets.MNIST(root='./mnist_data', train=True, download=True, transform=transform) ## 
+
+    # Set seed for reproducible shuffling
+    g = torch.Generator()
+    g.manual_seed(seed)
+
     ## Wraps the dataset into a PyTorch DataLoader
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True) 
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, generator=g) 
     ## Each call to the dataloader will return: images, labels = next(iter(dataloader))
     ## images: tensor of shape [B, 1, image_size, image_size], values in [0, 1]
     ## labels: tensor of digit labels [B] — not used in your physics application but available
     return dataloader
     
-def load_fashion_mnist_dataset(image_size=32, batch_size=64):
+def load_fashion_mnist_dataset(image_size=32, batch_size=64, seed=0):
     """
     Loads the Fashion-MNIST dataset and returns a PyTorch DataLoader.
     """
@@ -35,5 +40,9 @@ def load_fashion_mnist_dataset(image_size=32, batch_size=64):
     ])
     # Load the Fashion-MNIST dataset
     dataset = datasets.FashionMNIST(root='./fashion_mnist_data', train=True, download=True, transform=transform)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    g = torch.Generator()
+    g.manual_seed(seed)
+
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, generator=g)
     return dataloader    
