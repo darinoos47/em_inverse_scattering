@@ -102,6 +102,51 @@ class InverseScattering(nn.Module):
 
         return J_plus_stacked
 
+    def reconstruct_chi_from_output(self, network_output_stacked, J_plus_vector):
+        """
+        Calculates the final permittivity (chi) from the J-Net's output.
+        This implements the analytical reconstruction steps from the paper.
+
+        Args:
+            network_output_stacked (torch.Tensor): The direct output of the J-Net,
+                representing Gd*J-. Shape: [B, 2, H, W].
+            J_plus_vector (torch.Tensor): The radiating current vector.
+                Shape: [B, M, n_inc].
+        """
+        device = network_output_stacked.device
+        B, _, H, W = network_output_stacked.shape
+        M = H * W
+
+        # Convert the network's 2-channel real/imag output to a complex vector
+        E_minus_predicted = network_output_stacked[:, 0, :, :] + 1j * network_output_stacked[:, 1, :, :]
+        E_minus_predicted_vec = E_minus_predicted.view(B, M, 1)
+
+        # Move physics matrices to the correct device
+        Ei = self.Ei.to(device)
+        Gd = self.Gd.to(device)
+        Gd_inv = self.Gd_inv.to(device)
+
+        # Average over incident waves for a single reconstruction
+        J_plus_avg_vec = J_plus_vector.mean(dim=2, keepdim=True) # Shape: [B, M, 1]
+        Ei_avg_vec = Ei.mean(dim=1, keepdim=True).unsqueeze(0).expand(B, -1, -1) # Shape: [B, M, 1]
+
+        # 1. Calculate E_total = Ei + Gd*J+ + (Network Output)
+        E_plus = torch.matmul(Gd, J_plus_avg_vec)
+        E_total_vec = Ei_avg_vec + E_plus + E_minus_predicted_vec
+
+        # 2. Calculate J_total = inv(Gd) * (E_total - Ei)
+        J_total_vec = torch.matmul(Gd_inv, E_total_vec - Ei_avg_vec)
+
+        # 3. Calculate chi = J_total / E_total (with stabilization)
+        chi_vec = J_total_vec / (E_total_vec + 1e-8)
+
+        # Reshape to image format and take the real part for the final image
+        chi_img = chi_vec.real.view(B, 1, H, W)
+
+        # Clamp to the expected [0, 1] normalized range
+        return torch.clamp(chi_img, 0, 1)
+
+
     
     def BA(self, Es, gamma, image_size=40):
         B = Es.shape[0]

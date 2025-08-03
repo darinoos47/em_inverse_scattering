@@ -1,4 +1,4 @@
-# test/test_semi_supervised.py
+# test/test_semi_supervised.py (Final)
 
 import torch
 import torch.nn as nn
@@ -12,41 +12,30 @@ import argparse
 import sys
 import random
 
-# Add the project root to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from dataset.scattering_dataset import ScatteringDataset
 from models.forward_model import InverseScattering
 
-# --- Seeding Function for Reproducibility ---
 def set_seed(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+    random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+        torch.cuda.manual_seed(seed); torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-# --- J-Net Architecture (Copied from training script for self-containment) ---
 class JNet(nn.Module):
-    def __init__(self, in_channels_es=2, in_channels_j=2, out_channels=1):
+    def __init__(self, in_channels_es=2, in_channels_j=2, out_channels=2): # Output is 2-channel Gd*J-
         super(JNet, self).__init__()
         total_in_channels = in_channels_es + in_channels_j
         self.unet = torch.hub.load(
             'mateuszbuda/brain-segmentation-pytorch', 'unet',
-            in_channels=total_in_channels,
-            out_channels=out_channels,
-            init_features=32,
-            pretrained=False
+            in_channels=total_in_channels, out_channels=out_channels,
+            init_features=32, pretrained=False
         )
-
     def forward(self, es_input, j_plus_input):
         combined_input = torch.cat([es_input, j_plus_input], dim=1)
         return self.unet(combined_input)
 
-# --- Helper Functions ---
 def compute_psnr(img1, img2, max_val=1.0):
     mse = F.mse_loss(img1, img2)
     if mse == 0: return float('inf')
@@ -60,6 +49,7 @@ def compute_ssim_torch(pred, target):
     return ssim(pred_np, target_np, data_range=data_range, channel_axis=None)
 
 def generate_comparison_figure(gt_list, pred_list, output_dir, dataset_name, er_value):
+    # (This function remains the same)
     num_images = len(gt_list)
     fig, axes = plt.subplots(2, num_images, figsize=(num_images * 2.5, 5.5))
     vmin, vmax = 0.0, 1.0
@@ -102,17 +92,22 @@ def evaluate_model(model, data_loader, device, output_dir, dataset_name, er_valu
             processed_samples += 1
             Es_gt, perm_gt = Es_gt.to(device), perm_gt.to(device)
 
-            # --- KEY CHANGE: Calculate J+ for the J-Net input ---
-            j_plus_input = forward_model.calculate_J_plus(Es_gt)
+            j_plus_vector = forward_model.get_J_plus_vector(Es_gt)
+            j_plus_input_img = forward_model.calculate_J_plus(Es_gt)
             
-            # --- KEY CHANGE: Pass both inputs to the model ---
-            pred_permittivity = model(Es_gt, j_plus_input)
+            # --- STEP 1: Get the network's direct output (Gd*J-) ---
+            network_output = model(Es_gt, j_plus_input_img)
 
-            total_loss += loss_fn(pred_permittivity, perm_gt).item()
-            total_psnr += compute_psnr(pred_permittivity, perm_gt)
-            total_ssim += compute_ssim_torch(pred_permittivity, perm_gt)
+            # --- STEP 2: Use the analytical method to get the final permittivity ---
+            final_permittivity = forward_model.reconstruct_chi_from_output(network_output, j_plus_vector)
+
+            # --- STEP 3: Compare the FINAL permittivity to the ground truth ---
+            total_loss += loss_fn(final_permittivity, perm_gt).item()
+            total_psnr += compute_psnr(final_permittivity, perm_gt)
+            total_ssim += compute_ssim_torch(final_permittivity, perm_gt)
+            
             gt_images_to_plot.append(perm_gt)
-            pred_images_to_plot.append(pred_permittivity)
+            pred_images_to_plot.append(final_permittivity)
 
     if processed_samples > 0:
         avg_loss = total_loss / processed_samples
@@ -128,6 +123,7 @@ def evaluate_model(model, data_loader, device, output_dir, dataset_name, er_valu
 
 def main():
     parser = argparse.ArgumentParser(description="Test a trained Semi-Supervised J-Net model.")
+    # (Arguments remain the same)
     parser.add_argument('--checkpoint_path', type=str, required=True)
     parser.add_argument('--mnist_data_dir', type=str, required=True)
     parser.add_argument('--fashion_mnist_data_dir', type=str, required=True)
@@ -144,13 +140,13 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     print(f"Testing J-Net from checkpoint: {args.checkpoint_path}")
 
-    # Load the J-Net model architecture
-    model = JNet().to(device)
+    # --- KEY CHANGE: J-Net now outputs a 2-channel image (real/imag of Gd*J-) ---
+    model = JNet(out_channels=2).to(device)
+    
     checkpoint = torch.load(args.checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     print("✅ Model weights loaded successfully.")
 
-    # The forward model is always needed to calculate J+
     forward_model = InverseScattering(
         image_size=args.forward_model_image_size,
         n_inc_wave=args.n_incident_waves,
