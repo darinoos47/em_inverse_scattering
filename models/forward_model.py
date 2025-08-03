@@ -5,41 +5,33 @@ from utils.green_generator import generate_green_matrices  # ⬅️ Import your 
 import matplotlib.pyplot as plt
 
 class InverseScattering(nn.Module):
-    def __init__(self, image_size=40, n_inc_wave=36, er=1.1):
+    def __init__(self, image_size=32, n_inc_wave=32, er=1.1):
         super(InverseScattering, self).__init__()
 
-        # Generate Gs, Gd, Ei dynamically
         Gs, Gd, Ei = generate_green_matrices(
-            D=2,
-            R=3,
-            epsilon_b=1,
-            N=image_size,
-            Nr=n_inc_wave,
-            f=4e8
+            D=2, R=3, epsilon_b=1, N=image_size, Nr=n_inc_wave, f=4e8
         )
-
-        # Subsample based on number of incident waves
         Ei = Ei[:, ::(Ei.shape[1] // n_inc_wave)]
         Gs = Gs[::(Gs.shape[0] // n_inc_wave), :]
 
-        # Convert to torch complex tensors
         self.Gd = torch.tensor(Gd, dtype=torch.complex64)
         self.Gs = torch.tensor(Gs, dtype=torch.complex64)
         self.Ei = torch.tensor(Ei, dtype=torch.complex64)
 
         self.n = n_inc_wave
         self.chai = er - 1
-        
         self.image_size = image_size
-
-        # --- NEW: Pre-compute SVD of Gs for J+ calculation ---
-        # This is done once during initialization for efficiency.
-        # Using full_matrices=False is more efficient as we don't need the full U matrix.
+        
         U, S, Vh = torch.linalg.svd(self.Gs, full_matrices=False)
         self.U = U.to(dtype=torch.complex64)
         self.S = S.to(dtype=torch.complex64)
-        self.Vh = Vh.to(dtype=torch.complex64) # Vh is already V conjugate transpose
+        self.Vh = Vh.to(dtype=torch.complex64)
         print("SVD of Gs matrix pre-computed for J-Net.")
+
+        # --- FIX: Pre-compute the inverse of Gd for efficiency ---
+        print("Pre-computing inverse of Gd matrix...")
+        self.Gd_inv = torch.linalg.inv(self.Gd)
+        print("Inverse of Gd pre-computed.")
 
 
     def forward(self, x):

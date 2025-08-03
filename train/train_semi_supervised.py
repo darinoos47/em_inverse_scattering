@@ -1,4 +1,4 @@
-# train/train_semi_supervised.py (Corrected)
+# train/train_semi_supervised.py (with Checkpoint Loading)
 
 import torch
 import torch.nn as nn
@@ -44,23 +44,13 @@ class JNet(nn.Module):
         return self.unet(combined_input)
 
 # --- Helper Functions ---
-def compute_psnr(img1, img2, max_val=1.0):
-    mse = F.mse_loss(img1, img2)
-    if mse == 0: return float('inf')
-    return 20 * torch.log10(max_val / torch.sqrt(mse))
-
 def physics_loss_fn(network_output, j_plus_vector, original_Es_stacked, forward_model):
     """
     Calculates the physics-based loss (Maxwell's Loss).
     """
-    # First, get the final permittivity from the network's output
     final_chi = forward_model.reconstruct_chi_from_output(network_output, j_plus_vector)
-    
-    # Then, simulate the scattered field from that final permittivity
     simulated_Es = forward_model(final_chi)
     simulated_Es_stacked = torch.stack([simulated_Es.real, simulated_Es.imag], dim=1)
-    
-    # Compare the result to the original scattered field
     loss = F.mse_loss(simulated_Es_stacked, original_Es_stacked)
     return loss
 
@@ -89,7 +79,7 @@ def train_ssl(args):
     unlabeled_loader = DataLoader(unlabeled_dataset, batch_size=args.batch_size, shuffle=True)
 
     # --- Model, Optimizer, and Loss ---
-    model = JNet(out_channels=2).to(device) # J-Net outputs a 2-channel image
+    model = JNet(out_channels=2).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     supervised_loss_fn = torch.nn.MSELoss()
     
@@ -99,6 +89,16 @@ def train_ssl(args):
         n_inc_wave=args.n_incident_waves,
         er=args.relative_permittivity_er
     ).to(device).eval()
+
+    # --- KEY CHANGE: Add Checkpoint Loading Logic ---
+    if os.path.exists(args.checkpoint_path):
+        print(f"Resuming training from checkpoint: {args.checkpoint_path}")
+        checkpoint = torch.load(args.checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    else:
+        print(f"Starting new training. No checkpoint found at {args.checkpoint_path}")
+
 
     # --- Training Loop ---
     print(f"Starting semi-supervised training on {device}...")
@@ -117,24 +117,13 @@ def train_ssl(args):
             es_labeled, perm_labeled = labeled_data
             es_labeled, perm_labeled = es_labeled.to(device), perm_labeled.to(device)
             
-            # --- KEY CHANGE: Calculate the TRUE Gd*J- to use as the label ---
             with torch.no_grad():
-                # Calculate total current J from the ground truth permittivity
-                E_total_gt = forward_model.forward(perm_labeled) # This is Es, need E_total
-                # To get E_total, we need to solve the forward problem differently
-                # For simplicity in training, we can approximate the target.
-                # A better approach would be to pre-calculate these targets.
-                # Let's calculate the full J and then J-
-                Es_gt_complex = es_labeled[:, 0] + 1j * es_labeled[:, 1]
                 J_plus_gt_vec = forward_model.get_J_plus_vector(es_labeled)
-                
-                # We need J_total to find J_minus. This requires solving the forward problem.
-                # For now, let's use the final reconstructed chi as the loss target.
-                # This is a simplification but will allow training to proceed.
-                j_plus_labeled_img = forward_model.calculate_J_plus(es_labeled)
-                network_output_labeled = model(es_labeled, j_plus_labeled_img)
-                reconstructed_chi_labeled = forward_model.reconstruct_chi_from_output(network_output_labeled, J_plus_gt_vec)
-                sup_loss = supervised_loss_fn(reconstructed_chi_labeled, perm_labeled)
+            
+            j_plus_labeled_img = forward_model.calculate_J_plus(es_labeled)
+            network_output_labeled = model(es_labeled, j_plus_labeled_img)
+            reconstructed_chi_labeled = forward_model.reconstruct_chi_from_output(network_output_labeled, J_plus_gt_vec)
+            sup_loss = supervised_loss_fn(reconstructed_chi_labeled, perm_labeled)
 
             # --- Self-Supervised Step (on unlabeled data) ---
             es_unlabeled, _ = unlabeled_data
