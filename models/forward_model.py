@@ -31,7 +31,16 @@ class InverseScattering(nn.Module):
         self.chai = er - 1
         
         self.image_size = image_size
-        print(f"Gd[23,41] is: {Gd[23,41]}")
+
+        # --- NEW: Pre-compute SVD of Gs for J+ calculation ---
+        # This is done once during initialization for efficiency.
+        # Using full_matrices=False is more efficient as we don't need the full U matrix.
+        U, S, Vh = torch.linalg.svd(self.Gs, full_matrices=False)
+        self.U = U.to(dtype=torch.complex64)
+        self.S = S.to(dtype=torch.complex64)
+        self.Vh = Vh.to(dtype=torch.complex64) # Vh is already V conjugate transpose
+        print("SVD of Gs matrix pre-computed for J-Net.")
+
 
     def forward(self, x):
         """
@@ -56,6 +65,42 @@ class InverseScattering(nn.Module):
         Es = torch.bmm(Gsgt, Et)  # [B, n_meas, n_inc]
 
         return Es
+
+    def get_J_plus_vector(self, Es_stacked):
+        """
+        Calculates the radiating component of the current density (J+) and
+        returns it as a vector, which is needed for verification.
+        """
+        B, _, n_meas, n_inc = Es_stacked.shape
+        device = Es_stacked.device
+
+        Es = Es_stacked[:, 0, :, :] + 1j * Es_stacked[:, 1, :, :]
+
+        U = self.U.to(device)
+        S = self.S.to(device)
+        V = self.Vh.mH.to(device)
+
+        S_inv = torch.diag(1.0 / S)
+        Uh_Es = torch.matmul(U.mH.unsqueeze(0), Es)
+        J_plus = torch.matmul(S_inv, Uh_Es)
+        J_plus_vector = torch.matmul(V, J_plus) # Shape: [B, M, n_inc]
+        
+        return J_plus_vector
+
+    def calculate_J_plus(self, Es_stacked):
+        """
+        Calculates the radiating component of the current density (J+)
+        and returns it as a 2-channel image for input to the J-Net.
+        """
+        B, _, n_meas, n_inc = Es_stacked.shape
+        
+        J_plus_vector = self.get_J_plus_vector(Es_stacked) # Shape: [B, M, n_inc]
+        
+        J_plus_avg = J_plus_vector.mean(dim=2) # Shape: [B, M]
+        J_plus_img = J_plus_avg.view(B, self.image_size, self.image_size)
+        J_plus_stacked = torch.stack([J_plus_img.real, J_plus_img.imag], dim=1)
+
+        return J_plus_stacked
 
     
     def BA(self, Es, gamma, image_size=40):
