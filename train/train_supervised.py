@@ -15,6 +15,7 @@ import random
 from dataset.scattering_dataset import ScatteringDataset
 from models.forward_model import InverseScattering
 from models.dncnn import DnCNN
+from models.dncnn_bias_on import DnCNN_Bias_On
 from models.swinir import SwinIR
 
 # --- Seeding Function for Reproducibility ---
@@ -62,6 +63,13 @@ def get_model(model_name, in_channels, out_channels, image_size):
             mlp_ratio=4.,
             upscale=1,
             upsampler='',
+        )
+    elif model_name.lower() == 'dncnn_bias_on':
+        model = DnCNN_Bias_On(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            num_layers=17,
+            features=64
         )
     else:
         raise ValueError(f"Model '{model_name}' not recognized or implemented.")
@@ -211,7 +219,7 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Supervised Training Script")
-    parser.add_argument('--model_name', type=str, default='unet', choices=['unet', 'dncnn', 'swinir'], help='Name of the model architecture to use.')
+    parser.add_argument('--model_name', type=str, default='unet', choices=['unet', 'dncnn', 'swinir', 'dncnn_bias_on'], help='Name of the model architecture to use.')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility.')
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch_size', type=int, default=64)
