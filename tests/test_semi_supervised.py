@@ -1,5 +1,3 @@
-# test/test_semi_supervised.py (Final)
-
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -15,6 +13,8 @@ import random
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from dataset.scattering_dataset import ScatteringDataset
 from models.forward_model import InverseScattering
+from models.swinir import SwinIR
+from models.dncnn import DnCNN # Import DnCNN
 
 def set_seed(seed):
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
@@ -23,19 +23,45 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-class JNet(nn.Module):
-    def __init__(self, in_channels_es=2, in_channels_j=2, out_channels=2): # Output is 2-channel Gd*J-
-        super(JNet, self).__init__()
+# --- J-Net Architectures ---
+class JNetUNet(nn.Module):
+    def __init__(self, in_channels_es=2, in_channels_j=2, out_channels=2):
+        super(JNetUNet, self).__init__()
         total_in_channels = in_channels_es + in_channels_j
-        self.unet = torch.hub.load(
+        self.backbone = torch.hub.load(
             'mateuszbuda/brain-segmentation-pytorch', 'unet',
             in_channels=total_in_channels, out_channels=out_channels,
             init_features=32, pretrained=False
         )
     def forward(self, es_input, j_plus_input):
-        combined_input = torch.cat([es_input, j_plus_input], dim=1)
-        return self.unet(combined_input)
+        return self.backbone(torch.cat([es_input, j_plus_input], dim=1))
 
+class JNetSwinIR(nn.Module):
+    def __init__(self, in_channels_es=2, in_channels_j=2, out_channels=2, image_size=32):
+        super(JNetSwinIR, self).__init__()
+        total_in_channels = in_channels_es + in_channels_j
+        self.backbone = SwinIR(
+            img_size=image_size, in_chans=total_in_channels, out_chans=out_channels,
+            embed_dim=96, depths=[6, 6, 6, 6], num_heads=[6, 6, 6, 6],
+            window_size=8, mlp_ratio=4., upscale=1, upsampler='',
+        )
+    def forward(self, es_input, j_plus_input):
+        return self.backbone(torch.cat([es_input, j_plus_input], dim=1))
+
+class JNetDnCNN(nn.Module):
+    """ J-Net implementation using a DnCNN backbone. """
+    def __init__(self, in_channels_es=2, in_channels_j=2, out_channels=2):
+        super(JNetDnCNN, self).__init__()
+        total_in_channels = in_channels_es + in_channels_j
+        self.backbone = DnCNN(
+            in_channels=total_in_channels,
+            out_channels=out_channels
+        )
+    def forward(self, es_input, j_plus_input):
+        return self.backbone(torch.cat([es_input, j_plus_input], dim=1))
+
+
+# --- Helper Functions ---
 def compute_psnr(img1, img2, max_val=1.0):
     mse = F.mse_loss(img1, img2)
     if mse == 0: return float('inf')
@@ -48,8 +74,7 @@ def compute_ssim_torch(pred, target):
     if data_range == 0: return 1.0
     return ssim(pred_np, target_np, data_range=data_range, channel_axis=None)
 
-def generate_comparison_figure(gt_list, pred_list, output_dir, dataset_name, er_value):
-    # (This function remains the same)
+def generate_comparison_figure(gt_list, pred_list, output_dir, dataset_name, model_name, er_value):
     num_images = len(gt_list)
     fig, axes = plt.subplots(2, num_images, figsize=(num_images * 2.5, 5.5))
     vmin, vmax = 0.0, 1.0
@@ -62,16 +87,17 @@ def generate_comparison_figure(gt_list, pred_list, output_dir, dataset_name, er_
         im = axes[1, i].imshow(pred_img_norm, cmap='viridis', vmin=vmin, vmax=vmax)
         axes[1, i].set_xticks([]); axes[1, i].set_yticks([])
         if i == 0: axes[1, i].set_ylabel('Reconstructed')
-    fig.suptitle(f'JP-Net Evaluation on {dataset_name} (Normalized Contrast)')
+    fig.suptitle(f'SSL {model_name.upper()} on {dataset_name}')
     fig.tight_layout(rect=[0, 0, 0.9, 0.93])
     cbar_ax = fig.add_axes([0.92, 0.1, 0.02, 0.8])
     fig.colorbar(im, cax=cbar_ax)
-    save_path = os.path.join(output_dir, f"{dataset_name}_JP-Net_summary.png")
+    save_path = os.path.join(output_dir, f"{dataset_name}_SSL_{model_name}_summary.png")
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"Summary figure saved to: {save_path}")
 
-def evaluate_model(model, data_loader, device, output_dir, dataset_name, er_value, forward_model, num_eval_samples=5, seed=42):
+
+def evaluate_model(model, data_loader, device, output_dir, dataset_name, model_name, er_value, forward_model, num_eval_samples=5, seed=42):
     model.eval()
     total_loss, total_psnr, total_ssim = 0, 0, 0
     loss_fn = torch.nn.MSELoss()
@@ -82,30 +108,21 @@ def evaluate_model(model, data_loader, device, output_dir, dataset_name, er_valu
     all_indices = list(range(num_samples))
     random.Random(seed).shuffle(all_indices)
     eval_indices = set(all_indices[:num_eval_samples])
-    print(f"Will evaluate and visualize on {len(eval_indices)} samples with indices: {sorted(list(eval_indices))}")
+    print(f"Will evaluate on indices: {sorted(list(eval_indices))}")
 
     processed_samples = 0
     with torch.no_grad():
         for i, (Es_gt, perm_gt) in enumerate(data_loader):
-            if i not in eval_indices:
-                continue
+            if i not in eval_indices: continue
             processed_samples += 1
             Es_gt, perm_gt = Es_gt.to(device), perm_gt.to(device)
-
             j_plus_vector = forward_model.get_J_plus_vector(Es_gt)
             j_plus_input_img = forward_model.calculate_J_plus(Es_gt)
-            
-            # --- STEP 1: Get the network's direct output (Gd*J-) ---
             network_output = model(Es_gt, j_plus_input_img)
-
-            # --- STEP 2: Use the analytical method to get the final permittivity ---
             final_permittivity = forward_model.reconstruct_chi_from_output(network_output, j_plus_vector)
-
-            # --- STEP 3: Compare the FINAL permittivity to the ground truth ---
             total_loss += loss_fn(final_permittivity, perm_gt).item()
             total_psnr += compute_psnr(final_permittivity, perm_gt)
             total_ssim += compute_ssim_torch(final_permittivity, perm_gt)
-            
             gt_images_to_plot.append(perm_gt)
             pred_images_to_plot.append(final_permittivity)
 
@@ -114,16 +131,13 @@ def evaluate_model(model, data_loader, device, output_dir, dataset_name, er_valu
         avg_psnr = total_psnr / processed_samples
         avg_ssim = total_ssim / processed_samples
         print(f"Results for {dataset_name} (on {processed_samples} samples):")
-        print(f"  Average Loss (MSE): {avg_loss:.6f}")
-        print(f"  Average PSNR:       {avg_psnr:.2f} dB")
-        print(f"  Average SSIM:       {avg_ssim:.4f}")
-        generate_comparison_figure(gt_images_to_plot, pred_images_to_plot, output_dir, dataset_name, er_value)
-    else:
-        print("Warning: No samples were evaluated.")
+        print(f"  Avg Loss: {avg_loss:.6f}, Avg PSNR: {avg_psnr:.2f} dB, Avg SSIM: {avg_ssim:.4f}")
+        generate_comparison_figure(gt_images_to_plot, pred_images_to_plot, output_dir, dataset_name, model_name, er_value)
 
 def main():
     parser = argparse.ArgumentParser(description="Test a trained Semi-Supervised J-Net model.")
-    # (Arguments remain the same)
+    parser.add_argument('--model_name', type=str, required=True, choices=['unet', 'swinir', 'dncnn'])
+    # Add other arguments...
     parser.add_argument('--checkpoint_path', type=str, required=True)
     parser.add_argument('--mnist_data_dir', type=str, required=True)
     parser.add_argument('--fashion_mnist_data_dir', type=str, required=True)
@@ -138,10 +152,14 @@ def main():
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(args.output_dir, exist_ok=True)
-    print(f"Testing J-Net from checkpoint: {args.checkpoint_path}")
+    print(f"Testing SSL {args.model_name.upper()} from: {args.checkpoint_path}")
 
-    # --- KEY CHANGE: J-Net now outputs a 2-channel image (real/imag of Gd*J-) ---
-    model = JNet(out_channels=2).to(device)
+    if args.model_name == 'unet':
+        model = JNetUNet(out_channels=2).to(device)
+    elif args.model_name == 'swinir':
+        model = JNetSwinIR(out_channels=2, image_size=args.forward_model_image_size).to(device)
+    elif args.model_name == 'dncnn':
+        model = JNetDnCNN(out_channels=2).to(device)
     
     checkpoint = torch.load(args.checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
@@ -153,16 +171,15 @@ def main():
         er=args.relative_permittivity_er
     ).to(device)
 
-    mnist_seed = args.seed
-    fashion_mnist_seed = args.seed + 1
+    mnist_seed, fashion_mnist_seed = args.seed, args.seed + 1
 
     mnist_dataset = ScatteringDataset(data_dir=args.mnist_data_dir)
     mnist_loader = DataLoader(mnist_dataset, batch_size=1, shuffle=False)
-    evaluate_model(model, mnist_loader, device, args.output_dir, "MNIST", args.relative_permittivity_er, forward_model, num_eval_samples=args.num_eval_samples, seed=mnist_seed)
+    evaluate_model(model, mnist_loader, device, args.output_dir, "MNIST", args.model_name, args.relative_permittivity_er, forward_model, num_eval_samples=args.num_eval_samples, seed=mnist_seed)
 
     fashion_dataset = ScatteringDataset(data_dir=args.fashion_mnist_data_dir)
     fashion_loader = DataLoader(fashion_dataset, batch_size=1, shuffle=False)
-    evaluate_model(model, fashion_loader, device, args.output_dir, "Fashion-MNIST", args.relative_permittivity_er, forward_model, num_eval_samples=args.num_eval_samples, seed=fashion_mnist_seed)
+    evaluate_model(model, fashion_loader, device, args.output_dir, "Fashion-MNIST", args.model_name, args.relative_permittivity_er, forward_model, num_eval_samples=args.num_eval_samples, seed=fashion_mnist_seed)
 
 if __name__ == "__main__":
     main()
